@@ -11,7 +11,7 @@ import onnx
 
 
 class CaliDataset(Dataset):
-    def __init__(self, path, img_shape=640):
+    def __init__(self, path, img_shape=224):
         super().__init__()
         height, width = img_shape if isinstance(img_shape, (list, tuple)) else (img_shape, img_shape)
         self.transform = transforms.Compose(
@@ -95,12 +95,12 @@ def quant_espdet(onnx_path, target, num_of_bits, device, batchsz, imgsz, calib_d
 
 if __name__ == "__main__":
     quant_espdet(
-        onnx_path="espdet_pico_224_224_cat.onnx",
-        target="esp32p4",
+        onnx_path="../examples/bumblebee_detection/espdet_pico_224_224_bumblebee.onnx",
+        target="esp32s3",
         num_of_bits=8,
         device='cpu',
         batchsz=32,
         imgsz=224,
-        calib_dir="cat_calib",
-        espdl_model_path="espdet_pico_224_224_cat.espdl",
+        calib_dir="bumblebee_calib",
+        espdl_model_path="../examples/bumblebee_detection/espdet_pico_224_224_bumblebee.espdl",
     )

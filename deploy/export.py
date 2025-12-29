@@ -1,3 +1,6 @@
+import sys
+import os
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from ultralytics import YOLO
 from ultralytics.nn.modules import Attention
 from ultralytics.engine.exporter import Exporter, try_export, arange_patch
@@ -123,4 +126,4 @@ def Export(model_path, input_size):
     model.export(format="onnx", simplify=True, opset=13, imgsz=input_size)
 
 if __name__ == '__main__':
-    Export("../cfg/models/espdet_pico.yaml", 224)
+    Export("../examples/bumblebee_detection/espdet_pico_224_224_bumblebee.pt", 224)
