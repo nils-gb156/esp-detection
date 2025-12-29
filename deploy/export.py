@@ -1,17 +1,27 @@
-import sys
-import os
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from ultralytics import YOLO
-from ultralytics.nn.modules import Attention
+from ultralytics.nn.modules import Detect, Attention
 from ultralytics.engine.exporter import Exporter, try_export, arange_patch
 from ultralytics.utils import LOGGER, __version__, colorstr
 from ultralytics.utils.checks import check_requirements
+ # get_latest_opset removed in latest ultralytics; use fixed opset
 import torch
 import onnx
-from nn.modules import ESPDetect
-import ultralytics.nn.tasks as tasks
-from ultralytics import YOLO
-from nn.esp_tasks import custom_parse_model
+
+
+class ESP_Detect(Detect):
+    def forward(self, x):
+        """Returns predicted bounding boxes and class probabilities respectively."""
+        # self.nl = 3
+        box0 = self.cv2[0](x[0])
+        score0 = self.cv3[0](x[0])
+
+        box1 = self.cv2[1](x[1])
+        score1 = self.cv3[1](x[1])
+
+        box2 = self.cv2[2](x[2])
+        score2 = self.cv3[2](x[2])
+
+        return box0, score0, box1, score1, box2, score2
 
 
 class ESP_Attention(Attention):
@@ -48,17 +58,24 @@ class ESP_Detect_Exporter(Exporter):
     @try_export
     def export_onnx(self, prefix=colorstr("ONNX:")):
         """YOLO ONNX export."""
-        requirements = ["onnx>=1.14.0"]  # from esp-ppq requirments.txt
+        requirements = ["onnx>=1.14.0"]  # from esp-ppq requirements.txt
         # since onnxslim will cause NCHW -> 1(N*C)HW in yolo11, we replace onnxslim with onnxsim
         if self.args.simplify:
-            requirements += ["onnxsim", "onnxruntime" + ("-gpu" if torch.cuda.is_available() else "")]
+            requirements += [
+                "onnxsim",
+                "onnxruntime" + ("-gpu" if torch.cuda.is_available() else ""),
+            ]
         check_requirements(requirements)
 
-        opset_version = 13 # esp-ppq default 18
-        LOGGER.info(f"\n{prefix} starting export with onnx {onnx.__version__} opset {opset_version}...")
+        opset_version = self.args.opset or 18  # Use ONNX opset 18 for compatibility with current exporter
+        LOGGER.info(
+            f"\n{prefix} starting export with onnx {onnx.__version__} opset {opset_version}..."
+        )
         f = str(self.file.with_suffix(".onnx"))
         output_names = ["box0", "score0", "box1", "score1", "box2", "score2"]
-        dynamic = self.args.dynamic  # case 1: deploy model on ESP32, dynamic=False; case 2: QAT gt onnx for inference, dynamic=True
+        dynamic = (
+            self.args.dynamic
+        )  # case 1: deploy model on ESP32, dynamic=False; case 2: QAT gt onnx for inference, dynamic=True
         if dynamic:
             dynamic = {"images": {0: "batch"}}
             for name in output_names:
@@ -71,13 +88,12 @@ class ESP_Detect_Exporter(Exporter):
                 f,
                 verbose=False,
                 opset_version=opset_version,
-                do_constant_folding=True,
-                # WARNING: DNN inference with torch>=1.12 may require do_constant_folding=False
+                do_constant_folding=False,
                 input_names=["images"],
                 output_names=output_names,
                 dynamic_axes=dynamic or None,
             )
-            # Checks
+        # Checks
         model_onnx = onnx.load(f)  # load onnx model
 
         # Simplify
@@ -85,7 +101,9 @@ class ESP_Detect_Exporter(Exporter):
             try:
                 import onnxsim
 
-                LOGGER.info(f"{prefix} simplifying with onnxsim {onnxsim.__version__}...")
+                LOGGER.info(
+                    f"{prefix} simplifying with onnxsim {onnxsim.__version__}..."
+                )
                 model_onnx, _ = onnxsim.simplify(model_onnx)
 
             except Exception as e:
@@ -101,7 +119,10 @@ class ESP_Detect_Exporter(Exporter):
 
 
 class ESP_YOLO(YOLO):
-    def export(self, **kwargs, ):
+    def export(
+        self,
+        **kwargs,
+    ):
         self._check_is_pytorch_model()
         custom = {
             "imgsz": self.model.args["imgsz"],
@@ -111,19 +132,16 @@ class ESP_YOLO(YOLO):
             "verbose": False,
         }
         args = {**self.overrides, **custom, **kwargs, "mode": "export"}
-        return ESP_Detect_Exporter(overrides=args, _callbacks=self.callbacks)(model=self.model)
+        return ESP_Detect_Exporter(overrides=args, _callbacks=self.callbacks)(
+            model=self.model
+        )
 
 
-def Export(model_path, input_size):
-    tasks.parse_model = custom_parse_model
-    model = ESP_YOLO(model_path) #path/to/best.pt or path to model yaml
-    for m in model.modules():
-        if isinstance(m, Attention):
-            m.forward = ESP_Attention.forward.__get__(m)
-        if isinstance(m, ESPDetect):
-            m.forward = ESPDetect.export_onnx_forward.__get__(m)
+model = ESP_YOLO("../examples/bumblebee_detection/espdet_pico_224_224_bumblebee.pt")
+for m in model.modules():
+    if isinstance(m, Attention):
+        m.forward = ESP_Attention.forward.__get__(m)
+    if isinstance(m, Detect):
+        m.forward = ESP_Detect.forward.__get__(m)
 
-    model.export(format="onnx", simplify=True, opset=13, imgsz=input_size)
-
-if __name__ == '__main__':
-    Export("../examples/bumblebee_detection/espdet_pico_224_224_bumblebee.pt", 224)
+model.export(format="onnx", simplify=True, opset=18, dynamic=False, imgsz=224)
